@@ -1,0 +1,109 @@
+Sur les 2 serveurs haproxy 800Mb - opensuse 15.4 leap
+
+sudo zypper refresh
+sudo zypper install --no-confirm openssh
+sudo systemctl start sshd
+sudo systemctl status sshd
+sudo systemctl enable sshd
+sudo firewall-cmd --permanent --add-service=ssh
+sudo firewall-cmd --zone=public --add-port=9000/tcp --permanent
+sudo firewall-cmd --zone=public --add-port=6443/tcp --permanent
+sudo firewall-cmd --reload
+
+git clone https://github.com/kubernetes-sigs/kubespray.git
+
+sudo apt update && sudo apt install -y haproxy keepalived
+
+nano /etc/haproxy/haproxy.cfg
+
+*****à ajouter au fichier de conf****remplacer les IPs des serveurs****
+
+global
+    log         127.0.0.1 local2
+
+    chroot      /var/lib/haproxy
+    pidfile     /var/run/haproxy.pid
+    maxconn     4000
+    user        haproxy
+    group       haproxy
+    daemon
+    stats socket /var/lib/haproxy/stats
+
+defaults
+    mode                    http
+    log                     global
+    option                  httplog
+    option                  dontlognull
+    option http-server-close
+    option forwardfor       except 127.0.0.0/8
+    option                  redispatch
+    retries                 3
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         10s
+    timeout client          1m
+    timeout server          1m
+    timeout http-keep-alive 10s
+    timeout check           10s
+    maxconn                 3000
+
+
+
+listen stats
+    bind *:9000
+    stats enable
+    stats uri /stats
+    stats refresh 2s
+    stats auth xavki:password
+
+
+listen kubernetes-apiserver-https
+  bind *:6443
+  mode tcp
+  option log-health-checks
+  timeout client 3h
+  timeout server 3h
+  server master1 192.168.7.121:6443 check check-ssl verify none inter 10000
+  server master2 192.168.7.122:6443 check check-ssl verify none inter 10000
+  balance roundrobin
+
+******************************
+sudo systemctl restart haproxy
+sudo systemctl status haproxy
+netstat -natup
+******************************
+
+nano /etc/keepalived/keepalived.conf
+
+vrrp_script reload_haproxy {
+    script "/usr/bin/killall -0 haproxy"
+    interval 1
+}
+
+vrrp_instance VI_1 {
+   virtual_router_id 100
+   state BACKUP
+   priority 90
+
+   # interval de check
+   advert_int 1
+
+   # interface de synchro entre les LB
+   lvs_sync_daemon_interface eth0
+   interface eth0
+
+   # authentification entre les 2 machines LB
+   authentication {
+    auth_type PASS
+    auth_pass secret
+   }
+
+   # vip
+   virtual_ipaddress {
+    192.168.1.130/32 brd 192.168.1.255 scope global
+   }
+
+   track_script {
+     reload_haproxy
+   }
+

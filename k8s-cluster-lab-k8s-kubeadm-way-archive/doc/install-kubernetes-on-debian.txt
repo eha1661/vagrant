@@ -1,0 +1,95 @@
+sudo nano /etc/apt/apt.conf.d/20auto-upgrades :
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Download-Upgradeable-Packages "0";
+APT::Periodic::AutocleanInterval "0";
+APT::Periodic::Unattended-Upgrade "0";
+
+sudo apt-get remove -y update-manager
+sudo passwd root
+su
+apt update
+apt install -y curl
+swapoff -a; sed -i '/swap/d' /etc/fstab
+systemctl disable --now ufw
+
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# sysctl params required by setup, params persist across reboots
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.ipv4.ip_forward                 = 1
+EOF
+
+# Apply sysctl params without reboot
+sudo sysctl --system
+
+lsmod | grep br_netfilter
+lsmod | grep overlay
+
+sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables net.ipv4.ip_forward
+
+sudo apt-get update
+sudo apt-get install ca-certificates curl gnupg
+
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+echo \
+  "deb [arch="$(dpkg --print-architecture)" signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
+  "$(. /etc/os-release && echo "$VERSION_CODENAME")" stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt-get update
+sudo apt-get install containerd.io
+
+sudo nano /etc/containerd/config.toml
+*************************************
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+    SystemdCgroup = true
+
+systemctl restart containerd
+systemctl enable containerd
+
+
+kubeadm init --control-plane-endpoint="192.168.1.100:6443" --upload-certs --apiserver-advertise-address=192.168.1.71 --pod-network-cidr=10.244.0.0/16
+
+kubectl --kubeconfig=/etc/kubernetes/admin.conf create -f https://docs.projectcalico.org/v3.18/manifests/calico.yaml
+
+
+ kubeadm join 192.168.1.100:6443 --token mmi6pc.woe958ta6c860fa2 \
+        --discovery-token-ca-cert-hash sha256:a84478b627718552dc26098eed245e5b40e5f83e3eb6af8702ff6615e6c96f20 \
+        --control-plane
+
+
+
+join node:
+kubeadm join 192.168.1.100:6443 --token mmi6pc.woe958ta6c860fa2 \
+        --discovery-token-ca-cert-hash sha256:a84478b627718552dc26098eed245e5b40e5f83e3eb6af8702ff6615e6c96f20
+
+exit
+mkdir ~/.kube
+sudo cp /etc/kubernetes/admin.conf ~/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+wget https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.26.0/crictl-v1.26.0-linux-amd64.tar.gz
+sudo tar zxvf crictl-v1.26.0-linux-amd64.tar.gz -C /usr/local/bin
+crictl --version
+sudo crictl config --set runtime-endpoint=unix:///run/containerd/containerd.sock --set image-endpoint=unix:///run/containerd/containerd.sock
+
+
+uninstall
+*********
+sudo kubeadm reset
+sudo rm -rf /etc/cni/net.d
+sudo apt-get purge -y kubeadm kubectl kubelet kubernetes-cni kube*   
+sudo apt-get autoremove  
+sudo rm -rf ~/.kube
