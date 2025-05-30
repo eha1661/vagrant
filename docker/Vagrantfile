@@ -1,0 +1,26 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+
+RAM = 2048
+CPU = 2
+IP = "192.168.56.2"
+
+Vagrant.configure("2") do |config|
+  
+  config.vm.define "docker" do |docker|
+    docker.vm.box = "eazytrainingfr/ubuntu"
+    docker.vm.network "private_network", type: "dhcp", ip: IP
+    docker.vm.synced_folder "mnt/", "/home/vagrant/synced_folder/" 
+    docker.vm.hostname = "dockerVm"
+
+    docker.vm.provider "virtualbox" do |v|
+      v.name = "dockerVM"
+      v.memory = RAM
+      v.cpus = CPU
+    end
+    docker.vm.provision :shell do |shell|
+      shell.path = "install_docker.sh"
+    end
+  end
+end
